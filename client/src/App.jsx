@@ -1,5 +1,4 @@
-import axios from "axios";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   FaBell,
   FaTools,
@@ -22,72 +21,84 @@ import {
 } from "recharts";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import { isSupabaseConfigured, supabase } from "./services/api";
 document.body.style.margin = "0";
 document.body.style.padding = "0";
 document.body.style.overflowX = "hidden";
+
+const STATUS_COLORS = {
+  Available: "#22c55e",
+  "Low Stock": "#f59e0b",
+  Critical: "#ef4444",
+  "Service Due": "#a855f7",
+  Running: "#2563eb",
+  Stopped: "#64748b",
+};
+
+const toDayLabel = (value) =>
+  new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+  }).format(new Date(value));
+
+const lastNDays = (count) => {
+  const days = [];
+
+  for (let i = count - 1; i >= 0; i -= 1) {
+    const date = new Date();
+    date.setDate(date.getDate() - i);
+    days.push(date);
+  }
+
+  return days;
+};
+
 function App() {
   const [loggedIn, setLoggedIn] =
     useState(false);
+  const [currentUser, setCurrentUser] =
+    useState(null);
   const [email, setEmail] =
     useState("");
   const [password, setPassword] =
     useState("");
   const [error, setError] =
     useState("");
-  const [activePage, setActivePage] =
-    useState("Dashboard");
-    const [darkMode, setDarkMode] =
-  useState(true);
-  const [
-  showNotifications,
-  setShowNotifications,
-] = useState(false);
-const [showAddMachine, setShowAddMachine] =
+const [activePage, setActivePage] =
+  useState("Dashboard");
+  const [darkMode, setDarkMode] =
+useState(true);
+const [showNotifications, setShowNotifications] =
   useState(false);
+const [showAddMachine, setShowAddMachine] =
+useState(false);
 const [machineName, setMachineName] =
-  useState("");
+useState("");
+const [machineLocation, setMachineLocation] =
+useState("");
 const [emailNotif, setEmailNotif] =
 useState(true);
-
-const [machineAlerts, setMachineAlerts] =
-useState(true);
-
-const [serviceReminders, setServiceReminders] =
-useState(false);
-
 const [machineStock, setMachineStock] =
-  useState("");
+useState("");
 const [machines, setMachines] =
-  useState(() => {
-    const savedMachines =
-      localStorage.getItem(
-        "machines"
-      );
-
-    return savedMachines
-      ? JSON.parse(savedMachines)
-      : [
-          {
-            name: "CAT Engine",
-            stock: 4,
-            status: "Low Stock",
-          },
-
-          {
-            name: "Hydraulic Pump",
-            stock: 18,
-            status: "Available",
-          },
-        ];
-  });
+useState([]);
+const [services, setServices] =
+useState([]);
+const [notificationItems, setNotificationItems] =
+useState([]);
+const [loadingData, setLoadingData] =
+useState(false);
+const [dataError, setDataError] =
+useState("");
 const [editIndex, setEditIndex] =
-  useState(null);
+useState(null);
 
 const [editName, setEditName] =
-  useState("");
+useState("");
 
 const [editStock, setEditStock] =
-  useState("");
+useState("");
+const [editLocation, setEditLocation] =
+useState("");
 
 const [showEditModal, setShowEditModal] =
   useState(false);
@@ -99,13 +110,6 @@ const [showChat, setShowChat] =
   useState(
     window.innerWidth < 768
   );
-const notifications = [
-  "Machine #204 needs servicing",
-  "Inventory stock low",
-  "Revenue increased by 12%",
-  "AI detected unusual activity",
-];
-
 const [messages, setMessages] =
   useState([
     {
@@ -118,12 +122,40 @@ const [input, setInput] =
   const [searchTerm, setSearchTerm] =
   useState("");
 useEffect(() => {
-  localStorage.setItem(
-    "machines",
-    JSON.stringify(machines)
+  let mounted = true;
+
+  const loadSession = async () => {
+    const { data, error } =
+      await supabase.auth.getSession();
+
+    if (error) {
+      setError(error.message);
+      return;
+    }
+
+    if (mounted) {
+      setLoggedIn(Boolean(data.session));
+      setCurrentUser(data.session?.user ?? null);
+    }
+  };
+
+  loadSession();
+
+  const {
+    data: { subscription },
+  } = supabase.auth.onAuthStateChange(
+    (_event, session) => {
+      setLoggedIn(Boolean(session));
+      setCurrentUser(session?.user ?? null);
+    }
   );
-}, [machines]);
-   useEffect(() => {
+
+  return () => {
+    mounted = false;
+    subscription.unsubscribe();
+  };
+}, []);
+useEffect(() => {
   const handleResize = () => {
     if (
       window.innerWidth < 768
@@ -146,6 +178,56 @@ useEffect(() => {
       handleResize
     );
 }, []);
+
+useEffect(() => {
+  const loadData = async () => {
+    if (!loggedIn || !currentUser?.id) {
+      setMachines([]);
+      setServices([]);
+      setNotificationItems([]);
+      return;
+    }
+
+    setLoadingData(true);
+    setDataError("");
+
+    const [machinesResult, servicesResult, notificationsResult] =
+      await Promise.all([
+        supabase
+          .from("machines")
+          .select("*")
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("services")
+          .select("*")
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("notifications")
+          .select("*")
+          .order("created_at", { ascending: false }),
+      ]);
+
+    if (machinesResult.error) {
+      setDataError(machinesResult.error.message);
+    }
+
+    if (servicesResult.error) {
+      setDataError(servicesResult.error.message);
+    }
+
+    if (notificationsResult.error) {
+      setDataError(notificationsResult.error.message);
+    }
+
+    setMachines(machinesResult.data ?? []);
+    setServices(servicesResult.data ?? []);
+    setNotificationItems(notificationsResult.data ?? []);
+    setLoadingData(false);
+  };
+
+  loadData();
+}, [loggedIn, currentUser?.id]);
+
     const inputStyle = {
   width: "100%",
   padding: "14px",
@@ -178,32 +260,267 @@ const tableHead = {
   textAlign: "left",
   color: "#94a3b8",
 };
+
+const machineCount = machines.length;
+const lowStockCount = machines.filter(
+  (machine) => Number(machine.stock) < 5
+).length;
+const availableMachineCount = machines.filter(
+  (machine) => machine.status === "Available"
+).length;
+const pendingServicesCount = services.filter(
+  (service) => service.status !== "Completed"
+).length;
+const completedServicesCount = services.filter(
+  (service) => service.status === "Completed"
+).length;
+const unreadNotificationCount = notificationItems.filter(
+  (notification) => !notification.is_read
+).length;
+const totalMachineUnits = machines.reduce(
+  (sum, machine) => sum + Number(machine.stock || 0),
+  0
+);
+const uniqueLocationCount = new Set(
+  machines
+    .map((machine) => machine.location)
+    .filter(Boolean)
+).size;
+
+const serviceTrendData = useMemo(() => {
+  const days = lastNDays(7);
+
+  return days.map((day) => {
+    const dayKey = day.toISOString().slice(0, 10);
+
+    return {
+      day: toDayLabel(day),
+      value: services.filter((service) =>
+        (service.created_at || "").slice(0, 10) === dayKey
+      ).length,
+    };
+  });
+}, [services]);
+
+const statusSummary = useMemo(() => {
+  const buckets = {};
+
+  machines.forEach((machine) => {
+    const key = machine.status || "Available";
+    buckets[key] = (buckets[key] || 0) + 1;
+  });
+
+  return Object.entries(buckets).map(([name, value]) => ({
+    name,
+    value,
+  }));
+}, [machines]);
+
+const renderServicesPage = () => (
+  <div>
+    <h1 style={pageTitle}>Service Management</h1>
+
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: isMobile ? "1fr" : "repeat(4,1fr)",
+        gap: "14px",
+        marginBottom: "24px",
+      }}
+    >
+      <StatCard title="Total Services" value={services.length} color="#2563eb" />
+      <StatCard title="Pending" value={pendingServicesCount} color="#9333ea" />
+      <StatCard title="Completed" value={completedServicesCount} color="#22c55e" />
+      <StatCard title="Machines" value={machineCount} color="#ea580c" />
+    </div>
+
+    <div style={boxStyle}>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr style={tableHead}>
+            <th style={{ padding: "14px", textAlign: "left" }}>Service</th>
+            <th style={{ padding: "14px", textAlign: "left" }}>Machine</th>
+            <th style={{ padding: "14px", textAlign: "left" }}>Engineer</th>
+            <th style={{ padding: "14px", textAlign: "left" }}>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {services.length === 0 ? (
+            <tr>
+              <td colSpan="4" style={{ padding: "18px", color: "#94a3b8" }}>
+                No services yet. Seed the services table to show records here.
+              </td>
+            </tr>
+          ) : (
+            services.map((service) => {
+              const machine = machines.find(
+                (item) => item.id === service.machine_id
+              );
+
+              return (
+                <tr key={service.id} style={{ borderTop: "1px solid #1e293b" }}>
+                  <td style={{ padding: "14px" }}>{service.title}</td>
+                  <td style={{ padding: "14px" }}>{machine?.name || "Unassigned"}</td>
+                  <td style={{ padding: "14px" }}>{service.engineer_name || "Unassigned"}</td>
+                  <td style={{ padding: "14px" }}>{service.status}</td>
+                </tr>
+              );
+            })
+          )}
+        </tbody>
+      </table>
+    </div>
+  </div>
+);
+
+const renderAnalyticsPage = () => (
+  <div>
+    <h1 style={pageTitle}>Analytics Dashboard</h1>
+
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: isMobile ? "1fr" : "repeat(3,1fr)",
+        gap: "14px",
+        marginBottom: "24px",
+      }}
+    >
+      <StatCard title="Machines" value={machineCount} color="#2563eb" />
+      <StatCard title="Pending Services" value={pendingServicesCount} color="#9333ea" />
+      <StatCard title="Low Stock" value={lowStockCount} color="#ea580c" />
+    </div>
+
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: isMobile ? "1fr" : "2fr 1fr",
+        gap: "20px",
+        marginBottom: "30px",
+      }}
+    >
+      <div style={boxStyle}>
+        <h2 style={{ marginBottom: "20px" }}>Service Activity</h2>
+        <ResponsiveContainer width="100%" height={300}>
+          <LineChart data={serviceTrendData}>
+            <XAxis dataKey="day" />
+            <YAxis />
+            <Tooltip />
+            <Line type="monotone" dataKey="value" stroke="#facc15" strokeWidth={3} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div style={boxStyle}>
+        <h2 style={{ marginBottom: "20px" }}>Machine Status</h2>
+        <ResponsiveContainer width="100%" height={300}>
+          <PieChart>
+            <Pie data={statusSummary} dataKey="value" outerRadius={100}>
+              {statusSummary.map((entry, index) => (
+                <Cell
+                  key={entry.name}
+                  fill={STATUS_COLORS[entry.name] || COLORS[index % COLORS.length]}
+                />
+              ))}
+            </Pie>
+            <Tooltip />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: isMobile ? "1fr" : "repeat(3,1fr)",
+        gap: "14px",
+      }}
+    >
+      <div style={boxStyle}>
+        <h2>Open Alerts</h2>
+        <p style={{ color: "#94a3b8" }}>
+          {unreadNotificationCount} unread alerts in Supabase.
+        </p>
+      </div>
+
+      <div style={boxStyle}>
+        <h2>Completed Services</h2>
+        <p style={{ color: "#94a3b8" }}>
+          {completedServicesCount} completed service records.
+        </p>
+      </div>
+
+      <div style={boxStyle}>
+        <h2>Latest Alert</h2>
+        <p style={{ color: "#94a3b8" }}>
+          {notificationItems[0]?.message || "No alerts available."}
+        </p>
+      </div>
+    </div>
+  </div>
+);
    
 
   /* LOGIN */
   const handleLogin = async () => {
+  if (!isSupabaseConfigured) {
+    setError(
+      "Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to your client .env file."
+    );
+    return;
+  }
+
   try {
-    const res = await axios.post(
-      "http://localhost:5000/api/auth/login",
-      {
-        email,
-        password,
-      }
-    );
+    const { data, error } =
+      await supabase.auth.signInWithPassword(
+        {
+          email,
+          password,
+        }
+      );
 
-    localStorage.setItem("token", res.data.token);
+    if (error) {
+      throw error;
+    }
 
-    localStorage.setItem(
-      "user",
-      JSON.stringify(res.data.user)
-    );
-
+    setCurrentUser(data.user ?? null);
     setLoggedIn(true);
-
     setError("");
   } catch (err) {
     setError(
-      err.response?.data?.message || "Login Failed"
+      err.message || "Login Failed"
+    );
+  }
+};
+
+const handleRegister = async () => {
+  if (!isSupabaseConfigured) {
+    setError(
+      "Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to your client .env file."
+    );
+    return;
+  }
+
+  try {
+    const { data, error } =
+      await supabase.auth.signUp({
+        email,
+        password,
+      });
+
+    if (error) {
+      throw error;
+    }
+
+    setCurrentUser(data.user ?? null);
+    setError(
+      data.session
+        ? ""
+        : "Account created. If email confirmation is enabled, check your inbox before signing in."
+    );
+    setLoggedIn(Boolean(data.session));
+  } catch (err) {
+    setError(
+      err.message || "Registration Failed"
     );
   }
 };
@@ -627,6 +944,24 @@ const tableHead = {
           >
             Login to Dashboard
           </button>
+
+          <button
+            onClick={handleRegister}
+            style={{
+              width: "100%",
+              marginTop: "12px",
+              padding: "14px",
+              border: "1px solid #334155",
+              borderRadius: "14px",
+              background: "transparent",
+              color: "white",
+              fontSize: "16px",
+              fontWeight: "bold",
+              cursor: "pointer",
+            }}
+          >
+            Register
+          </button>
         </div>
       </div>
     );
@@ -646,6 +981,7 @@ const tableHead = {
 
   const tableColumn = [
     "Machine",
+    "Location",
     "Stock",
     "Status",
   ];
@@ -655,6 +991,7 @@ const tableHead = {
   machines.forEach((machine) => {
     const machineData = [
       machine.name,
+      machine.location || "",
       machine.stock,
       machine.status,
     ];
@@ -675,7 +1012,7 @@ const tableHead = {
   const renderPage = () => {
     switch (activePage) {
       case "Services":
-        
+       return renderServicesPage();
   return (
     <div>
       <h1 style={pageTitle}>
@@ -795,6 +1132,7 @@ const tableHead = {
     </div>
   );
   case "Analytics":
+    return renderAnalyticsPage();
   return (
     <div>
       <h1 style={pageTitle}>
@@ -1672,6 +2010,21 @@ return (
 </button>
   </div>
 </div>
+{dataError && (
+  <div
+    style={{
+      marginBottom: "18px",
+      color: "#f87171",
+    }}
+  >
+    {dataError}
+  </div>
+)}
+{loadingData && (
+  <div style={{ marginBottom: "18px", color: "#94a3b8" }}>
+    Loading live data from Supabase...
+  </div>
+)}
 <div
   style={{
     display: "grid",
@@ -1693,7 +2046,7 @@ return (
       Total Machines
     </h3>
 
-    <h1>142</h1>
+    <h1>{machineCount}</h1>
 
     <p
       style={{
@@ -1710,10 +2063,10 @@ return (
         color: "#facc15",
       }}
     >
-      Low Stock
+      Units in Stock
     </h3>
 
-    <h1>18</h1>
+    <h1>{totalMachineUnits}</h1>
 
     <p
       style={{
@@ -1733,7 +2086,7 @@ return (
       Available
     </h3>
 
-    <h1>124</h1>
+    <h1>{availableMachineCount}</h1>
 
     <p
       style={{
@@ -1750,17 +2103,17 @@ return (
         color: "#a855f7",
       }}
     >
-      Total Value
+      Locations
     </h3>
 
-    <h1>$2.4M</h1>
+    <h1>{uniqueLocationCount}</h1>
 
     <p
       style={{
         color: "#64748b",
       }}
     >
-      Inventory value
+      Active sites
     </p>
   </div>
 </div>
@@ -1781,6 +2134,16 @@ style={{
 }}
 >
   Machine
+</th>
+<th
+style={{
+  padding: "18px 10px",
+  textAlign: "left",
+  color: "#94a3b8",
+  fontSize: "15px",
+}}
+>
+  Location
 </th>
 <th
 style={{
@@ -1869,10 +2232,17 @@ style={{
           fontSize: "13px",
         }}
       >
-        CAT Heavy Equipment
+        {machine.location || "Unassigned location"}
       </div>
     </div>
   </div>
+</td>
+<td
+  style={{
+    padding: "22px 10px",
+  }}
+>
+  {machine.location || "—"}
 </td>
 <td
   style={{
@@ -1910,16 +2280,22 @@ style={{
 </td>
         <td>
           <button
-            onClick={() => {
-            const updatedMachines =
-            machines.filter(
-            (_, i) => i !== index
-    );
+            onClick={async () => {
+            const machineToDelete = machines[index];
+            const { error } = await supabase
+              .from("machines")
+              .delete()
+              .eq("id", machineToDelete.id);
 
-  setMachines(
-    updatedMachines
-  );
-}}
+            if (error) {
+              setDataError(error.message);
+              return;
+            }
+
+            setMachines(
+              machines.filter((_, i) => i !== index)
+            );
+          }}
             style={{
               background:
                 "#dc2626",
@@ -1950,8 +2326,9 @@ style={{
     setEditIndex(index);
     setEditName(machine.name);
     setEditStock(machine.stock);
-    setShowEditModal(true);
-  }}
+            setEditLocation(machine.location || "");
+            setShowEditModal(true);
+          }}
   style={{
     background: "#2563eb",
     border: "none",
@@ -2044,33 +2421,52 @@ style={{
 
       <input
         placeholder="Location"
-        style={inputStyle}
-      />
-      <button
-  onClick={() => {
-    const updatedMachines = [
-      ...machines,
-    ];
+         value={editLocation}
+         onChange={(e) =>
+           setEditLocation(e.target.value)
+         }
+         style={inputStyle}
+       />
+       <button
+  onClick={async () => {
+    const targetMachine = machines[editIndex];
 
-    updatedMachines[
-      editIndex
-    ] = {
-      ...updatedMachines[
-        editIndex
-      ],
+    if (!targetMachine) {
+      return;
+    }
 
-      name: editName,
+    const nextStatus =
+      Number(editStock) < 5
+        ? "Low Stock"
+        : "Available";
 
-      stock: editStock,
+    const { error } = await supabase
+      .from("machines")
+      .update({
+        name: editName,
+        stock: Number(editStock),
+        location: editLocation,
+        status: nextStatus,
+      })
+      .eq("id", targetMachine.id);
 
-      status:
-        editStock < 5
-          ? "Low Stock"
-          : "Available",
-    };
+    if (error) {
+      setDataError(error.message);
+      return;
+    }
 
     setMachines(
-      updatedMachines
+      machines.map((machine, index) =>
+        index === editIndex
+          ? {
+              ...machine,
+              name: editName,
+              stock: Number(editStock),
+              location: editLocation,
+              status: nextStatus,
+            }
+          : machine
+      )
     );
 
     setShowEditModal(false);
@@ -2149,24 +2545,46 @@ style={{
         style={inputStyle}
       />
 
+      <input
+        placeholder="Location"
+        value={machineLocation}
+        onChange={(e) =>
+          setMachineLocation(e.target.value)
+        }
+        style={inputStyle}
+      />
+
       <button
-        onClick={() => {
-          const newMachine = {
-            name: machineName,
-            stock: machineStock,
-            status:
-              machineStock < 5
-                ? "Low Stock"
-                : "Available",
+        onClick={async () => {
+          const nextStatus =
+            Number(machineStock) < 5
+              ? "Low Stock"
+              : "Available";
+
+          const payload = {
+            name: machineName.trim(),
+            stock: Number(machineStock),
+            location: machineLocation.trim(),
+            status: nextStatus,
+            created_by: currentUser?.id ?? null,
           };
 
-          setMachines([
-            ...machines,
-            newMachine,
-          ]);
+          const { data, error } = await supabase
+            .from("machines")
+            .insert(payload)
+            .select()
+            .single();
+
+          if (error) {
+            setDataError(error.message);
+            return;
+          }
+
+          setMachines([data, ...machines]);
 
           setMachineName("");
           setMachineStock("");
+          setMachineLocation("");
 
           setShowAddMachine(false);
         }}
@@ -2244,7 +2662,8 @@ default:
                   }}
                 >
                   Welcome back,
-                  Admin
+                  {currentUser?.email?.split("@")[0] ||
+                    "user"}
                 </p>
               </div>
 
@@ -2290,7 +2709,7 @@ default:
       Notifications
     </h3>
 
-    {notifications.map(
+    {notificationItems.map(
       (item, index) => (
         <div
           key={index}
@@ -2302,7 +2721,7 @@ default:
             fontSize: "14px",
           }}
         >
-          {item}
+          {item.message}
         </div>
       )
     )}
@@ -2385,7 +2804,7 @@ default:
       fontWeight: "bold",
     }}
   >
-    {notifications.length}
+    {unreadNotificationCount}
   </div>
 </div>
                 {/* USER */}
@@ -2401,17 +2820,18 @@ default:
                       "14px",
                   }}
                 >
-                  Admin User
+                  {currentUser?.email ||
+                    "Admin User"}
                 </div>
 
                 {/* LOGOUT */}
 
                 <button
-                  onClick={() =>
-                    setLoggedIn(
-                      false
-                    )
-                  }
+                  onClick={async () => {
+                    await supabase.auth.signOut();
+                    setLoggedIn(false);
+                    setCurrentUser(null);
+                  }}
                   style={{
                     background:
                       "#dc2626",
@@ -2450,25 +2870,25 @@ default:
             >
               <StatCard
                 title="Total Machines"
-                value="248"
+                value={machineCount}
                 color="#2563eb"
               />
 
               <StatCard
                 title="Pending Services"
-                value="18"
+                value={pendingServicesCount}
                 color="#9333ea"
               />
 
               <StatCard
-                title="Revenue"
-                value="₹8.2L"
+                title="Low Stock"
+                value={lowStockCount}
                 color="#059669"
               />
 
               <StatCard
-                title="AI Alerts"
-                value="07"
+                title="Alerts"
+                value={unreadNotificationCount}
                 color="#ea580c"
               />
             </div>
@@ -2498,16 +2918,14 @@ default:
                       "20px",
                   }}
                 >
-                  Revenue Analytics
+                  Service Activity
                 </h2>
 
                 <ResponsiveContainer
                   width="100%"
                   height={240}
                 >
-                  <LineChart
-                    data={data}
-                  >
+                  <LineChart data={serviceTrendData}>
                     <XAxis dataKey="day" />
 
                     <YAxis />
@@ -2547,14 +2965,14 @@ default:
                   <PieChart>
                     <Pie
                       data={
-                        pieData
+                        statusSummary
                       }
                       dataKey="value"
                       outerRadius={
                         90
                       }
                     >
-                      {pieData.map(
+                      {statusSummary.map(
                         (
                           entry,
                           index
@@ -2564,9 +2982,9 @@ default:
                               index
                             }
                             fill={
-                              COLORS[
-                                index
-                              ]
+                              STATUS_COLORS[
+                                entry.name
+                              ] || COLORS[index % COLORS.length]
                             }
                           />
                         )
@@ -2605,8 +3023,8 @@ default:
                     "14px",
                 }}
               >
-                AI detected unusual
-                inventory movement.
+                Machines below stock threshold:{" "}
+                {lowStockCount}.
               </p>
 
               <p
@@ -2619,8 +3037,7 @@ default:
                     "14px",
                 }}
               >
-                Revenue may grow by
-                22% next month.
+                Pending service jobs: {pendingServicesCount}.
               </p>
 
               <p
@@ -2631,8 +3048,9 @@ default:
                     "14px",
                 }}
               >
-                3 systems require
-                urgent maintenance.
+                Latest alert:{" "}
+                {notificationItems[0]?.message ||
+                  "No alerts right now."}
               </p>
             </div>
 
@@ -2654,31 +3072,19 @@ default:
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns:
-                  "repeat(3,1fr)",
+                gridTemplateColumns: isMobile ? "1fr" : "repeat(3,1fr)",
                 gap: "14px",
               }}
             >
-              <MachineCard
-                name="CAT Excavator"
-                status="Running"
-                fuel="72%"
-                temp="65°C"
-              />
-
-              <MachineCard
-                name="CAT Loader"
-                status="Service Due"
-                fuel="40%"
-                temp="82°C"
-              />
-
-              <MachineCard
-                name="CAT Bulldozer"
-                status="Running"
-                fuel="88%"
-                temp="59°C"
-              />
+              {machines.slice(0, 3).map((machine) => (
+                <MachineCard
+                  key={machine.id}
+                  name={machine.name}
+                  status={machine.status}
+                  stock={machine.stock}
+                  location={machine.location || "—"}
+                />
+              ))}
             </div>
           </div>
         );
@@ -2956,8 +3362,8 @@ function NotificationItem({
 function MachineCard({
   name,
   status,
-  fuel,
-  temp,
+  stock,
+  location,
 }) {
   return (
     <div
@@ -3009,7 +3415,7 @@ function MachineCard({
           fontSize: "14px",
         }}
       >
-        Fuel : {fuel}
+        Stock : {stock}
       </p>
 
       <p
@@ -3018,7 +3424,7 @@ function MachineCard({
           fontSize: "14px",
         }}
       >
-        Temperature : {temp}
+        Location : {location}
       </p>
     </div>
   );
@@ -3087,7 +3493,7 @@ function StatCard({
           fontWeight: "bold",
         }}
       >
-        {value.includes("₹")
+        {String(value).includes("₹")
           ? `₹${count}L`
           : count}
       </h1>
