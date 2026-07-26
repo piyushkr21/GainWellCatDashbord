@@ -22,6 +22,8 @@ import {
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { isSupabaseConfigured, supabase } from "./services/api";
+import excavatorImg from "./assets/excavator.png";
+import logoImg from "./assets/logo.png";
 document.body.style.margin = "0";
 document.body.style.padding = "0";
 document.body.style.overflowX = "hidden";
@@ -780,7 +782,7 @@ const handleRegister = async () => {
           }}
         >
           <img
-            src="/src/assets/excavator.png"
+            src={excavatorImg}
             alt="machine"
             style={{
               position:
@@ -861,7 +863,7 @@ const handleRegister = async () => {
             }}
           >
             <img
-              src="/src/assets/logo.png"
+              src={logoImg}
               alt="logo"
               style={{
                 width: "240px",
@@ -2204,7 +2206,7 @@ style={{
     }}
   >
     <img
-      src="/src/assets/excavator.png"
+      src={excavatorImg}
       alt="machine"
       style={{
         width: "55px",
@@ -3156,7 +3158,7 @@ return (
         }}
       >
         <img
-          src="/src/assets/logo.png"
+          src={logoImg}
           alt="logo"
           style={{
             width: "170px",
@@ -3374,7 +3376,7 @@ function MachineCard({
       }}
     >
       <img
-        src="/src/assets/excavator.png"
+        src={excavatorImg}
         alt="machine"
         style={{
           width: "100%",
